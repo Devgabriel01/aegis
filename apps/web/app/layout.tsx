@@ -61,9 +61,25 @@ export const viewport: Viewport = {
   initialScale: 1,
 }
 
+const clerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const inner = (
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} dark`}>
+      <body>
+        <QueryProvider>
+          {children}
+          <Toaster />
+        </QueryProvider>
+      </body>
+    </html>
+  )
+
+  if (!clerkKey) return inner
+
   return (
     <ClerkProvider
+      publishableKey={clerkKey}
       appearance={{
         variables: {
           colorPrimary: "#1A6ED4",
@@ -76,14 +92,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         },
       }}
     >
-      <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} dark`}>
-        <body>
-          <QueryProvider>
-            {children}
-            <Toaster />
-          </QueryProvider>
-        </body>
-      </html>
+      {inner}
     </ClerkProvider>
   )
 }

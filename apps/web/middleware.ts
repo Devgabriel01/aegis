@@ -1,11 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server"
-
-const isPublicRoute = createRouteMatcher([
-  "/",
-  "/login(.*)",
-  "/register(.*)",
-  "/api/webhooks(.*)",
-])
+import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
 
 const isPlatformRoute = createRouteMatcher([
   "/dashboard(.*)",
@@ -20,11 +15,20 @@ const isPlatformRoute = createRouteMatcher([
   "/settings(.*)",
 ])
 
-export default clerkMiddleware(async (auth, req) => {
-  if (isPlatformRoute(req)) {
-    await auth.protect()
-  }
-})
+const clerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+
+// When Clerk is not configured, pass through all requests
+function bypassMiddleware(_req: NextRequest) {
+  return NextResponse.next()
+}
+
+export default clerkKey
+  ? clerkMiddleware(async (auth, req) => {
+      if (isPlatformRoute(req)) {
+        await auth.protect()
+      }
+    })
+  : bypassMiddleware
 
 export const config = {
   matcher: [
