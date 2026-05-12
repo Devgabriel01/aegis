@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic"
+
 import { PlatformSidebar } from "@/components/platform/platform-sidebar"
 import { PlatformTopbar } from "@/components/platform/platform-topbar"
 
