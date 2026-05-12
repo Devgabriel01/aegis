@@ -1,0 +1,768 @@
+// AEGIS — Prisma Schema
+// Enterprise Cybersecurity Platform Data Model
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// MULTI-TENANCY — Organizations & Workspaces
+// ============================================================
+
+model Organization {
+  id          String   @id @default(cuid())
+  clerkOrgId  String   @unique
+  name        String
+  slug        String   @unique
+  plan        Plan     @default(FREE)
+  logoUrl     String?
+  website     String?
+  industry    String?
+  country     String?
+  timezone    String   @default("UTC")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  members         OrganizationMember[]
+  workspaces      Workspace[]
+  invitations     Invitation[]
+  auditLogs       AuditLog[]
+  apiKeys         ApiKey[]
+  billingSettings BillingSettings?
+
+  @@index([slug])
+  @@index([clerkOrgId])
+}
+
+model Workspace {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  color          String   @default("#1A6ED4")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization      Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  threats           Threat[]
+  incidents         Incident[]
+  vulnerabilities   Vulnerability[]
+  assets            Asset[]
+  logSources        LogSource[]
+  reports           Report[]
+  scanJobs          ScanJob[]
+  alertRules        AlertRule[]
+
+  @@index([organizationId])
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  clerkUserId    String
+  email          String
+  name           String
+  avatarUrl      String?
+  role           OrganizationRole @default(ANALYST)
+  lastSeenAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedIncidents Incident[]    @relation("AssignedAnalyst")
+  auditLogs        AuditLog[]
+
+  @@unique([organizationId, clerkUserId])
+  @@index([organizationId])
+  @@index([clerkUserId])
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  email          String
+  role           OrganizationRole @default(ANALYST)
+  token          String           @unique @default(cuid())
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([token])
+}
+
+// ============================================================
+// THREAT INTELLIGENCE
+// ============================================================
+
+model Threat {
+  id             String        @id @default(cuid())
+  workspaceId    String
+  type           ThreatType
+  title          String
+  description    String        @db.Text
+  severity       Severity      @default(MEDIUM)
+  status         ThreatStatus  @default(ACTIVE)
+  confidence     Int           @default(50)  // 0-100
+  source         String?
+  sourceUrl      String?
+
+  // IOC fields
+  iocType        IocType?
+  iocValue       String?
+  ipReputation   Int?          // 0-100 (0=benign, 100=malicious)
+  geoCountry     String?
+  geoCity        String?
+  geoLat         Float?
+  geoLon         Float?
+
+  // AI analysis
+  aiSummary      String?       @db.Text
+  aiScore        Float?        // AI risk score 0-100
+  tags           String[]
+
+  firstSeenAt    DateTime      @default(now())
+  lastSeenAt     DateTime      @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  incidents   ThreatIncident[]
+
+  @@index([workspaceId])
+  @@index([severity])
+  @@index([status])
+  @@index([iocValue])
+  @@index([type, status])
+}
+
+// ============================================================
+// INCIDENT RESPONSE
+// ============================================================
+
+model Incident {
+  id             String          @id @default(cuid())
+  workspaceId    String
+  assignedToId   String?
+  title          String
+  description    String          @db.Text
+  severity       Severity        @default(MEDIUM)
+  status         IncidentStatus  @default(OPEN)
+  priority       Priority        @default(MEDIUM)
+  category       IncidentCategory
+  tlp            TlpLevel        @default(WHITE)  // Traffic Light Protocol
+
+  // SLA
+  slaDeadlineAt  DateTime?
+  slaBreached    Boolean         @default(false)
+
+  // Timeline
+  detectedAt     DateTime        @default(now())
+  acknowledgedAt DateTime?
+  containedAt    DateTime?
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+
+  // AI analysis
+  aiSummary      String?         @db.Text
+  aiRecommendation String?       @db.Text
+  aiScore        Float?
+
+  tags           String[]
+  affectedAssets String[]        // Asset IDs
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedTo   OrganizationMember? @relation("AssignedAnalyst", fields: [assignedToId], references: [id])
+  threats      ThreatIncident[]
+  timeline     IncidentTimeline[]
+  comments     IncidentComment[]
+  evidence     IncidentEvidence[]
+
+  @@index([workspaceId])
+  @@index([severity, status])
+  @@index([assignedToId])
+  @@index([detectedAt])
+}
+
+model ThreatIncident {
+  threatId   String
+  incidentId String
+
+  threat   Threat   @relation(fields: [threatId], references: [id], onDelete: Cascade)
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@id([threatId, incidentId])
+}
+
+model IncidentTimeline {
+  id         String   @id @default(cuid())
+  incidentId String
+  action     String
+  detail     String?  @db.Text
+  actorName  String?
+  actorType  String   @default("user")  // user, system, ai
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+}
+
+model IncidentComment {
+  id         String   @id @default(cuid())
+  incidentId String
+  authorId   String
+  authorName String
+  content    String   @db.Text
+  isInternal Boolean  @default(false)
+  editedAt   DateTime?
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+}
+
+model IncidentEvidence {
+  id          String   @id @default(cuid())
+  incidentId  String
+  type        String   // log, screenshot, pcap, hash, etc.
+  name        String
+  description String?
+  url         String?  // Supabase Storage URL
+  hash        String?  // SHA-256
+  size        Int?
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+}
+
+// ============================================================
+// VULNERABILITY MANAGEMENT
+// ============================================================
+
+model Vulnerability {
+  id             String              @id @default(cuid())
+  workspaceId    String
+  cveId          String?             // CVE-2024-XXXX
+  title          String
+  description    String              @db.Text
+  severity       Severity
+  cvssScore      Float?
+  cvssVector     String?
+  status         VulnStatus          @default(OPEN)
+
+  // Target
+  targetType     String              // domain, ip, asset
+  targetValue    String
+  assetId        String?
+
+  // Technical details
+  affectedComponent String?
+  affectedVersion   String?
+  patchVersion      String?
+  patchUrl          String?
+  exploitAvailable  Boolean          @default(false)
+  exploitInWild     Boolean          @default(false)
+
+  // Recommendations
+  recommendation    String?          @db.Text
+  remediationSteps  String?          @db.Text
+  references        String[]
+
+  // Scan origin
+  scanJobId      String?
+  discoveredAt   DateTime            @default(now())
+  verifiedAt     DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  scanJob   ScanJob?  @relation(fields: [scanJobId], references: [id])
+
+  @@index([workspaceId])
+  @@index([severity, status])
+  @@index([cveId])
+  @@index([targetValue])
+}
+
+model ScanJob {
+  id          String      @id @default(cuid())
+  workspaceId String
+  type        ScanType
+  target      String
+  status      ScanStatus  @default(QUEUED)
+  progress    Int         @default(0)
+  options     Json        @default("{}")
+  results     Json?
+  errorLog    String?     @db.Text
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  vulnerabilities Vulnerability[]
+
+  @@index([workspaceId])
+  @@index([status])
+}
+
+// ============================================================
+// ASSET MANAGEMENT
+// ============================================================
+
+model Asset {
+  id             String      @id @default(cuid())
+  workspaceId    String
+  type           AssetType
+  name           String
+  value          String      // IP, domain, hostname, etc.
+  description    String?
+  environment    Environment @default(PRODUCTION)
+  tags           String[]
+  owner          String?
+  criticality    Severity    @default(MEDIUM)
+  status         AssetStatus @default(ACTIVE)
+
+  // Network
+  ipAddress      String?
+  macAddress     String?
+  port           Int?
+  protocol       String?
+
+  // TLS/SSL (for domains)
+  sslExpiry      DateTime?
+  sslIssuer      String?
+  sslGrade       String?
+
+  // Cloud
+  cloudProvider  String?
+  cloudRegion    String?
+  cloudAccountId String?
+
+  // Monitoring
+  lastSeenAt     DateTime?
+  lastScannedAt  DateTime?
+  uptimePercent  Float?
+  riskScore      Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, value])
+  @@index([workspaceId])
+  @@index([type])
+  @@index([status])
+}
+
+// ============================================================
+// SIEM — Log Ingestion
+// ============================================================
+
+model LogSource {
+  id          String         @id @default(cuid())
+  workspaceId String
+  name        String
+  type        LogSourceType
+  status      LogSourceStatus @default(ACTIVE)
+  endpoint    String?
+  apiKey      String?         // hashed
+  format      String          @default("json")
+  lastEventAt DateTime?
+  eventsPerDay Int?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  events    LogEvent[]
+
+  @@index([workspaceId])
+}
+
+model LogEvent {
+  id          String    @id @default(cuid())
+  sourceId    String
+  workspaceId String
+  severity    Severity  @default(INFO)
+  message     String
+  rawLog      String?   @db.Text
+  parsedData  Json?
+  sourceIp    String?
+  destIp      String?
+  userId      String?
+  action      String?
+  outcome     String?
+  tags        String[]
+  timestamp   DateTime
+  createdAt   DateTime  @default(now())
+
+  source LogSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, timestamp])
+  @@index([sourceId])
+  @@index([severity])
+  @@index([sourceIp])
+}
+
+// ============================================================
+// ALERT RULES
+// ============================================================
+
+model AlertRule {
+  id          String      @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  severity    Severity    @default(MEDIUM)
+  enabled     Boolean     @default(true)
+  type        AlertType
+  conditions  Json        // Rule conditions
+  actions     Json        // Notification actions
+  cooldownMin Int         @default(60)
+  hitCount    Int         @default(0)
+  lastHitAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([enabled])
+}
+
+// ============================================================
+// REPORTS
+// ============================================================
+
+model Report {
+  id          String       @id @default(cuid())
+  workspaceId String
+  title       String
+  type        ReportType
+  format      ReportFormat @default(PDF)
+  status      ReportStatus @default(PENDING)
+  summary     String?      @db.Text
+  fileUrl     String?
+  parameters  Json?
+  generatedBy String?      // User ID
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// ============================================================
+// API KEYS
+// ============================================================
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  keyPrefix      String    // First 8 chars for identification
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  scopes         String[]
+  createdBy      String
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyHash])
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  memberId       String?
+  action         String   // CREATE_INCIDENT, DELETE_ASSET, etc.
+  resource       String   // incident, asset, user, etc.
+  resourceId     String?
+  oldValue       Json?
+  newValue       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member       OrganizationMember? @relation(fields: [memberId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([memberId])
+  @@index([action])
+}
+
+// ============================================================
+// BILLING
+// ============================================================
+
+model BillingSettings {
+  id               String   @id @default(cuid())
+  organizationId   String   @unique
+  stripeCustomerId String?  @unique
+  stripeSubId      String?  @unique
+  plan             Plan     @default(FREE)
+  seatsUsed        Int      @default(1)
+  seatsLimit       Int      @default(5)
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  cancelAtPeriodEnd Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Plan {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  ANALYST
+  VIEWER
+  READONLY
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum ThreatType {
+  MALWARE
+  PHISHING
+  RANSOMWARE
+  APT
+  BOTNET
+  DDOS
+  BRUTEFORCE
+  SQLI
+  XSS
+  RCE
+  PRIVESC
+  LATERAL_MOVEMENT
+  EXFILTRATION
+  INSIDER_THREAT
+  SOCIAL_ENGINEERING
+  SUPPLY_CHAIN
+  ZERO_DAY
+  OTHER
+}
+
+enum ThreatStatus {
+  ACTIVE
+  MONITORING
+  MITIGATED
+  RESOLVED
+  FALSE_POSITIVE
+}
+
+enum IocType {
+  IP
+  DOMAIN
+  URL
+  EMAIL
+  FILE_HASH_MD5
+  FILE_HASH_SHA1
+  FILE_HASH_SHA256
+  REGISTRY_KEY
+  MUTEX
+  USER_AGENT
+  ASN
+  CVE
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  CONTAINED
+  ERADICATED
+  RECOVERING
+  RESOLVED
+  CLOSED
+  FALSE_POSITIVE
+}
+
+enum IncidentCategory {
+  UNAUTHORIZED_ACCESS
+  MALWARE
+  RANSOMWARE
+  DATA_BREACH
+  PHISHING
+  DDOS
+  VULNERABILITY_EXPLOIT
+  INSIDER_THREAT
+  SUPPLY_CHAIN
+  SYSTEM_COMPROMISE
+  POLICY_VIOLATION
+  OTHER
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TlpLevel {
+  RED
+  AMBER
+  GREEN
+  WHITE
+}
+
+enum VulnStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  ACCEPTED_RISK
+  FALSE_POSITIVE
+}
+
+enum ScanType {
+  FULL
+  PORT
+  SSL
+  DNS
+  HEADERS
+  SUBDOMAIN
+  CVE
+  WEB_APP
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AssetType {
+  SERVER
+  WORKSTATION
+  DOMAIN
+  IP_ADDRESS
+  CLOUD_INSTANCE
+  CONTAINER
+  DATABASE
+  API_ENDPOINT
+  CERTIFICATE
+  NETWORK_DEVICE
+  MOBILE_DEVICE
+  IOT_DEVICE
+}
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
+  UNKNOWN
+}
+
+enum Environment {
+  PRODUCTION
+  STAGING
+  DEVELOPMENT
+  TESTING
+  DR
+}
+
+enum LogSourceType {
+  NGINX
+  APACHE
+  LINUX_SYSLOG
+  WINDOWS_EVENT
+  CLOUDFLARE
+  AWS_CLOUDTRAIL
+  GCP_AUDIT
+  AZURE_ACTIVITY
+  PALO_ALTO
+  FORTINET
+  CISCO_ASA
+  CROWDSTRIKE
+  CUSTOM
+}
+
+enum LogSourceStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+  CONFIGURING
+}
+
+enum AlertType {
+  THRESHOLD
+  ANOMALY
+  CORRELATION
+  IOC_MATCH
+  BLACKLIST
+  REGEX
+}
+
+enum ReportType {
+  EXECUTIVE_SUMMARY
+  INCIDENT_REPORT
+  VULNERABILITY_REPORT
+  THREAT_INTELLIGENCE
+  COMPLIANCE
+  AUDIT
+  CUSTOM
+}
+
+enum ReportFormat {
+  PDF
+  DOCX
+  CSV
+  JSON
+  HTML
+}
+
+enum ReportStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
