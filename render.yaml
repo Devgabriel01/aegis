@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: aegis-web
+    runtime: docker
+    dockerfilePath: ./infra/docker/Dockerfile
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
